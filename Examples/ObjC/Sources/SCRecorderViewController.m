@@ -19,10 +19,6 @@
 
 #define kVideoPreset AVCaptureSessionPresetHigh
 
-////////////////////////////////////////////////////////////
-// PRIVATE DEFINITION
-/////////////////////
-
 @interface SCRecorderViewController () {
     SCRecorder *_recorder;
     UIImage *_photo;
@@ -32,23 +28,9 @@
 
 @property (strong, nonatomic) SCRecorderToolsView *focusView;
 
-@end
-
-////////////////////////////////////////////////////////////
-// IMPLEMENTATION
-/////////////////////
+@end  
 
 @implementation SCRecorderViewController
-
-#pragma mark - UIViewController 
-
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_7_0
-
-- (UIStatusBarStyle) preferredStatusBarStyle {
-	return UIStatusBarStyleLightContent;
-}
-
-#endif
 
 #pragma mark - Left cycle
 
@@ -100,18 +82,6 @@
     if (![_recorder prepare:&error]) {
         NSLog(@"Prepare error: %@", error.localizedDescription);
     }
-}
-
-- (void)recorder:(SCRecorder *)recorder didSkipVideoSampleBufferInSession:(SCRecordSession *)recordSession {
-    NSLog(@"Skipped video buffer");
-}
-
-- (void)recorder:(SCRecorder *)recorder didReconfigureAudioInput:(NSError *)audioInputError {
-    NSLog(@"Reconfigured audio input: %@", audioInputError);
-}
-
-- (void)recorder:(SCRecorder *)recorder didReconfigureVideoInput:(NSError *)videoInputError {
-    NSLog(@"Reconfigured video input: %@", videoInputError);
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -177,26 +147,25 @@
     [self performSegueWithIdentifier:@"Photo" sender:self];
 }
 
-- (void) handleReverseCameraTapped:(id)sender {
+#pragma mark - event response
+
+- (void)handleReverseCameraTapped:(id)sender {
 	[_recorder switchCaptureDevices];
 }
 
-- (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary *)info {
-    NSURL *url = info[UIImagePickerControllerMediaURL];
-    [picker dismissViewControllerAnimated:YES completion:nil];
-    
-    SCRecordSessionSegment *segment = [SCRecordSessionSegment segmentWithURL:url info:nil];
-    
-    [_recorder.session addSegment:segment];
-    _recordSession = [SCRecordSession recordSession];
-    [_recordSession addSegment:segment];
-    
-    [self showVideo];
-}
-- (void) handleStopButtonTapped:(id)sender {
+- (void)handleStopButtonTapped:(id)sender {
     [_recorder pause:^{
         [self saveAndShowSession:_recorder.session];
     }];
+}
+
+- (void)handleTouchDetected:(SCTouchDetector*)touchDetector {
+    if (touchDetector.state == UIGestureRecognizerStateBegan) {
+        _ghostImageView.hidden = YES;
+        [_recorder record];
+    } else if (touchDetector.state == UIGestureRecognizerStateEnded) {
+        [_recorder pause];
+    }
 }
 
 - (void)saveAndShowSession:(SCRecordSession *)recordSession {
@@ -292,17 +261,74 @@
     [self.flashModeButton setTitle:flashModeString forState:UIControlStateNormal];
 }
 
-- (void)prepareSession {
-    if (_recorder.session == nil) {
-        
-        SCRecordSession *session = [SCRecordSession recordSession];
-        session.fileType = AVFileTypeQuickTimeMovie;
-        
-        _recorder.session = session;
+- (IBAction)capturePhoto:(id)sender {
+    [_recorder capturePhoto:^(NSError *error, UIImage *image) {
+        if (image != nil) {
+            [self showPhoto:image];
+        } else {
+            [self showAlertViewWithTitle:@"Failed to capture photo" message:error.localizedDescription];
+        }
+    }];
+}
+
+- (IBAction)switchGhostMode:(id)sender {
+    _ghostModeButton.selected = !_ghostModeButton.selected;
+    _ghostImageView.hidden = !_ghostModeButton.selected;
+    
+    [self updateGhostImage];
+}
+
+- (IBAction)toolsButtonTapped:(UIButton *)sender {
+    CGRect toolsFrame = self.toolsContainerView.frame;
+    CGRect openToolsButtonFrame = self.openToolsButton.frame;
+    
+    if (toolsFrame.origin.y < 0) {
+        sender.selected = YES;
+        toolsFrame.origin.y = 0;
+        openToolsButtonFrame.origin.y = toolsFrame.size.height + 15;
+    } else {
+        sender.selected = NO;
+        toolsFrame.origin.y = -toolsFrame.size.height;
+        openToolsButtonFrame.origin.y = 15;
     }
     
-    [self updateTimeRecordedLabel];
-    [self updateGhostImage];
+    [UIView animateWithDuration:0.15 animations:^{
+        self.toolsContainerView.frame = toolsFrame;
+        self.openToolsButton.frame = openToolsButtonFrame;
+    }];
+}
+
+- (IBAction)closeCameraTapped:(id)sender {
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+#pragma mark - UIImagePickerControllerDelegate
+
+- (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary *)info {
+    NSURL *url = info[UIImagePickerControllerMediaURL];
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    
+    SCRecordSessionSegment *segment = [SCRecordSessionSegment segmentWithURL:url info:nil];
+    
+    [_recorder.session addSegment:segment];
+    _recordSession = [SCRecordSession recordSession];
+    [_recordSession addSegment:segment];
+    
+    [self showVideo];
+}
+
+#pragma mark - SCRecorderDelegate
+
+- (void)recorder:(SCRecorder *)recorder didSkipVideoSampleBufferInSession:(SCRecordSession *)recordSession {
+    NSLog(@"Skipped video buffer");
+}
+
+- (void)recorder:(SCRecorder *)recorder didReconfigureAudioInput:(NSError *)audioInputError {
+    NSLog(@"Reconfigured audio input: %@", audioInputError);
+}
+
+- (void)recorder:(SCRecorder *)recorder didReconfigureVideoInput:(NSError *)videoInputError {
+    NSLog(@"Reconfigured video input: %@", videoInputError);
 }
 
 - (void)recorder:(SCRecorder *)recorder didCompleteSession:(SCRecordSession *)recordSession {
@@ -335,6 +361,25 @@
     [self updateGhostImage];
 }
 
+- (void)recorder:(SCRecorder *)recorder didAppendVideoSampleBufferInSession:(SCRecordSession *)recordSession {
+    [self updateTimeRecordedLabel];
+}
+
+#pragma mark - private method
+
+- (void)prepareSession {
+    if (_recorder.session == nil) {
+        
+        SCRecordSession *session = [SCRecordSession recordSession];
+        session.fileType = AVFileTypeQuickTimeMovie;
+        
+        _recorder.session = session;
+    }
+    
+    [self updateTimeRecordedLabel];
+    [self updateGhostImage];
+}
+
 - (void)updateTimeRecordedLabel {
     CMTime currentTime = kCMTimeZero;
     
@@ -343,29 +388,6 @@
     }
     
     self.timeRecordedLabel.text = [NSString stringWithFormat:@"%.2f sec", CMTimeGetSeconds(currentTime)];
-}
-
-- (void)recorder:(SCRecorder *)recorder didAppendVideoSampleBufferInSession:(SCRecordSession *)recordSession {
-    [self updateTimeRecordedLabel];
-}
-
-- (void)handleTouchDetected:(SCTouchDetector*)touchDetector {
-    if (touchDetector.state == UIGestureRecognizerStateBegan) {
-        _ghostImageView.hidden = YES;
-        [_recorder record];
-    } else if (touchDetector.state == UIGestureRecognizerStateEnded) {
-        [_recorder pause];
-    }
-}
-
-- (IBAction)capturePhoto:(id)sender {
-    [_recorder capturePhoto:^(NSError *error, UIImage *image) {
-        if (image != nil) {
-            [self showPhoto:image];
-        } else {
-            [self showAlertViewWithTitle:@"Failed to capture photo" message:error.localizedDescription];
-        }
-    }];
 }
 
 - (void)updateGhostImage {
@@ -377,44 +399,20 @@
             image = segment.lastImage;
         }
     }
-
     
     _ghostImageView.image = image;
-//    _ghostImageView.image = [_recorder snapshotOfLastAppendedVideoBuffer];
+    //    _ghostImageView.image = [_recorder snapshotOfLastAppendedVideoBuffer];
     _ghostImageView.hidden = !_ghostModeButton.selected;
+}
+
+#pragma mark - system method
+
+- (UIStatusBarStyle) preferredStatusBarStyle {
+    return UIStatusBarStyleLightContent;
 }
 
 - (BOOL)prefersStatusBarHidden {
     return YES;
-}
-
-- (IBAction)switchGhostMode:(id)sender {
-    _ghostModeButton.selected = !_ghostModeButton.selected;
-    _ghostImageView.hidden = !_ghostModeButton.selected;
-    
-    [self updateGhostImage];
-}
-- (IBAction)toolsButtonTapped:(UIButton *)sender {
-    CGRect toolsFrame = self.toolsContainerView.frame;
-    CGRect openToolsButtonFrame = self.openToolsButton.frame;
-    
-    if (toolsFrame.origin.y < 0) {
-        sender.selected = YES;
-        toolsFrame.origin.y = 0;
-        openToolsButtonFrame.origin.y = toolsFrame.size.height + 15;
-    } else {
-        sender.selected = NO;
-        toolsFrame.origin.y = -toolsFrame.size.height;
-        openToolsButtonFrame.origin.y = 15;
-    }
-    
-    [UIView animateWithDuration:0.15 animations:^{
-        self.toolsContainerView.frame = toolsFrame;
-        self.openToolsButton.frame = openToolsButtonFrame;
-    }];
-}
-- (IBAction)closeCameraTapped:(id)sender {
-    [self.navigationController popViewControllerAnimated:YES];
 }
 
 @end
